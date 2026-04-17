@@ -13,11 +13,9 @@ const configPath = path.join(binDir, "cf.json");
 const zipFile = "web.zip";
 
 const publicPort = process.env.PORT || 3000;
-const internalVlessPort = 4000; 
+const internalPort = 4000;
 
-// 【核心修改点】直接从云平台环境变量读取 UID。
-// 如果你忘记在后台设置 UID，它会使用后面的这串默认值兜底防崩溃。
-const uid = process.env.UID || "cac4d96c-abf4-4ccd-8143-87a65d216e32"; 
+const uid = process.env.UID || "cac4d96c-abf4-4ccd-8143-87a65d216e32";
 
 async function setupAndRun() {
     try {
@@ -43,7 +41,7 @@ async function setupAndRun() {
             log: { loglevel: "warning" },
             inbounds: [{
                 listen: "127.0.0.1",
-                port: internalVlessPort,
+                port: internalPort,
                 protocol: "vless",
                 settings: {
                     clients: [{ id: uid }], // 使用 UID
@@ -51,7 +49,7 @@ async function setupAndRun() {
                 },
                 streamSettings: {
                     network: "ws",
-                    wsSettings: { path: "/vless-argo" }
+                    wsSettings: { path: "/myprogram" }
                 }
             }],
             outbounds: [{ protocol: "freedom" }]
@@ -60,13 +58,13 @@ async function setupAndRun() {
 
         // [4] 启动核心服务（屏蔽日志输出，保持控制台干净）
         const xcmd = spawn(path.resolve(binPath), ["run", "-config", path.resolve(configPath)], {
-            stdio: 'ignore', 
+            stdio: 'ignore',
             shell: false
         });
 
         // [5] 启动网关与网页服务器 (反向代理)
         const proxy = httpProxy.createProxyServer({
-            target: `http://127.0.0.1:${internalVlessPort}`,
+            target: `http://127.0.0.1:${internalPort}`,
             ws: true
         });
 
@@ -98,7 +96,7 @@ async function setupAndRun() {
                     
                     <div class="info-box">
                         <p><strong>节点 UID:</strong> <span class="code">${uid}</span></p>
-                        <p><strong>连接 Path:</strong> <span class="code">/vless-argo</span></p>
+                        <p><strong>连接 Path:</strong> <span class="code">/myprogram</span></p>
                         <p><strong>外部 Port:</strong> <span class="code">${publicPort}</span></p>
                     </div>
                 </div>
@@ -110,21 +108,14 @@ async function setupAndRun() {
 
         // 识别特定路径，转交 VLESS 流量
         server.on('upgrade', (req, socket, head) => {
-            if (req.url === '/vless-argo') {
+            if (req.url === '/myprogram') {
                 proxy.ws(req, socket, head);
             } else {
                 socket.destroy();
             }
         });
 
-        server.listen(Number(publicPort), '0.0.0.0', () => {
-            console.log("\n" + "=".repeat(50));
-            console.log("🚀 服务部署成功！");
-            console.log(`📍 UID: ${uid}`);
-            console.log(`📍 Path: /vless-argo`);
-            console.log(`📍 外部端口: ${publicPort}`);
-            console.log("=".repeat(50) + "\n");
-        });
+        server.listen(Number(publicPort), '0.0.0.0', () => {});
 
     } catch (e) {
         console.error("❌ 程序运行出错:", e.message);
