@@ -1,125 +1,149 @@
-import fileSystem from 'fs-extra';
-import { execSync, spawn } from 'child_process';
-import path from 'path';
-import axios from 'axios';
-import adminZip from 'adm-zip';
-import http from 'http';
-import httpProxy from 'http-proxy';
+const http = require('http');
+const {spawn} = require('child_process');
+const WebSocket = require('ws');
 
-const downloadUrl = "https://mystatic.wasmer.app/web.zip";
-const binDir = "./bin";
-const binWebPath = path.join(binDir, "web");
-const binConfigPath = path.join(binDir, "cf.json");
-const zipFile = "web.zip";
+const PORT = 1000;
 
-const uuid = "c181a925-1361-436e-a281-7773e0965b46";
-
-const port = 20119;
-const innerPort = 4000;
-
-// 代理 ---
-async function setup() {
-    console.log("============================== 正在启动 ==============================");
-    try {
-        const response = await axios({
-            url: downloadUrl,
-            method: 'GET',
-            responseType: 'arraybuffer',
-            timeout: 15000,
-            headers: {'User-Agent': 'Mozilla/5.0'}
-        });
-        await fileSystem.writeFile(zipFile, response.data);
-        await fileSystem.ensureDir(binDir);
-        const zip = new adminZip(zipFile);
-        zip.extractAllTo(binDir, true);
-        await fileSystem.remove(zipFile);
-        console.log("✅ web完成");
-    } catch (e) {
-        console.error("❌ web错误:", e.message);
-    }
-
-    try {
-        fileSystem.chmodSync(binWebPath, 0o755);
-        console.log("✅ p完成");
-    } catch (e) {
-        console.error("❌ p错误:", e.message);
-    }
-
-    try {
-        const config = {
-            log: {loglevel: "warning"},
-            inbounds: [{
-                listen: "127.0.0.1",
-                port: innerPort,
-                protocol: "vless",
-                settings: {
-                    clients: [{id: uuid}],
-                    decryption: "none"
-                },
-                streamSettings: {
-                    network: "ws",
-                    wsSettings: {path: "/myprogram"}
+// 1. 创建 HTTP 服务
+const server = http.createServer((req, res) => {
+    res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
+    res.end(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Shell控制台</title>
+            <style>
+                body {
+                    background: #1e1e1e;
+                    font-family: Arial;
+                    margin: 0;
+                    padding: 25px 0 25px 0;
                 }
-            }],
-            outbounds: [{protocol: "freedom"}]
-        };
-        await fileSystem.outputJson(binConfigPath, config);
-        console.log("✅ c完成");
-    } catch (e) {
-        console.error("❌ c错误:", e.message);
-    }
+        
+                #main {
+                    width: 95%;
+                    height: 85vh;
+                    background: #000;
+                    color: #4af626;
+                    margin: 0 auto;
+                    padding: 15px 1%;
+                    border: 1px solid #444;
+                    border-bottom: none;
+                    border-radius: 10px 10px 0 0;
+                    white-space: pre-wrap;
+                    overflow-y: auto;
+                    box-sizing: border-box;
+        
+                }
+                /* 自定义滚动条 */
+                #main::-webkit-scrollbar { width: 8px; }
+                #main::-webkit-scrollbar-track { background: transparent; }
+                #main::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+                #main::-webkit-scrollbar-thumb:hover { background: #777; }
+        
+                #bottom {
+                    width: 95%;
+                    height: auto;
+                    background: #111;
+                    color: #4af626;
+                    margin: 0 auto;
+                    padding: 15px 1%;
+                    border: 1px solid #444;
+                    border-radius: 0 0 10px 10px;
+                    box-sizing: border-box;
+                    overflow: hidden;
+                }
+        
+        
+                #text {
+                    float: left;
+                    width: 93%;
+                    height: 30px;
+                    background: transparent;
+                    color: #4af626;
+                    margin-right: 2%;
+                    padding: 0;
+                    border: 0;
+                    outline: none;
+                    line-height: 30px;
+                }
+                #button {
+                    float: left;
+                    width: 5%;
+                    height: 30px;
+                    background: #555;
+                    color: #4af626;
+                    margin: 0;
+                    padding: 0;
+                    border: 0;
+                    border-radius: 5px;
+                    cursor: pointer;
+                }
+                #button:active {
+                    background: #333;
+                    transform: scale(0.95); /* 按钮稍微缩小一点，产生下压感 */
+                }
+            </style>
+        </head>
+        <body>
+        
+        <div class="container">
+            <div id="main"></div>
+            <div id="bottom">
+                <input id="text" type="text" placeholder="输入命令并按回车..." autofocus autocomplete="off">
+                <button id="button">执行</button>
+            </div>
+        </div>
+            <script>
+                const webSocket = new WebSocket('ws://' + location.host);
+                const consoleContent = document.getElementById('main');
+                const cmdContent = document.getElementById('text');
+                let historyCmd = [], cmdCount = -1;
 
-    try {
-        const web = spawn(path.resolve(binWebPath), ["run", "-config", path.resolve(binConfigPath)], {
-            stdio: 'inherit',
-            shell: false
-        });
-        console.log("✅ s完成");
-    } catch (e) {
-        console.error("❌ s错误:", e.message);
-    }
-}
+                webSocket.onmessage = (e) => {
+                    consoleContent.textContent += e.data;
+                    consoleContent.scrollTop = consoleContent.scrollHeight;
+                };
 
-// 网页 ---
-function startServer() {
-    const proxy = httpProxy.createProxyServer({
-        target: `http://127.0.0.1:${innerPort}`,
-        ws: true,
-        changeOrigin: true
+                function send() {
+                    if (!cmdContent.value) return;
+                    historyCmd.push(cmdContent.value); 
+                    cmdCount = historyCmd.length;
+                    webSocket.send(cmdContent.value + '\\n'); 
+                    cmdContent.value = '';
+                }
+
+                document.getElementById('button').onclick = send;
+                cmdContent.onkeydown = (e) => {
+                    if (e.key === 'Enter') send();                   
+                    if (e.key === 'ArrowUp' && hi > 0) {
+                        cmdContent.value = historyCmd[--cmdCount];   
+                    } 
+                    if (e.key === 'ArrowDown') {
+                        cmdContent.value = ++cmdCount < historyCmd.length ? historyCmd[cmdCount] : "";
+                    }
+                };
+            </script>
+        </body>
+        </html>
+    `);
+});
+
+// 2. WebSocket 处理
+const webSocketServer = new WebSocket.Server({server});
+webSocketServer.on('connection', (webSocket) => {
+    const shell = spawn('bash', ['-i'], {shell: true, env: process.env});
+
+    shell.stdout.on('data', d => webSocket.send(d.toString()));
+    shell.stderr.on('data', d => webSocket.send(d.toString()));
+
+    webSocket.on('message', msg => {
+        if (shell.stdin.writable) shell.stdin.write(msg);
     });
 
-    const server = http.createServer((req, res) => {
-        // --- [入口 1]：普通网页流量抓包 ---
-        console.log(`[HTTP 流量] >>> 收到请求，路径: ${req.url} (来自: ${req.socket.remoteAddress})`);
-
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(htmlPage); // htmlPage 是你定义的导航页代码
-    });
-
-    // 重点：WebSocket 升级请求抓包
-    server.on('upgrade', (req, socket, head) => {
-        // --- [入口 2]：WebSocket 流量抓包 ---
-        console.log(`[WS 流量] !!! 拦截到升级请求，路径: ${req.url}`);
-
-        if (req.url.startsWith('/myprogram') || req.url.startsWith('/test')) {
-            console.log(`✅ 匹配成功: [${req.url}]，正转交给内核...`);
-            proxy.ws(req, socket, head);
-        } else {
-            console.log(`❌ 匹配失败: [${req.url}]，已阻断连接`);
-            socket.destroy();
-        }
-    });
-
-    server.listen(port, '0.0.0.0', () => {
-        console.log(`🚀 外部网关已在端口 ${port} 启动，开始监控所有进入的路径...`);
-    });
-
-    // 监听代理转发错误，如果转发不出去这里会报错
-    proxy.on('error', (err) => {
-        console.error(`⚠️ 转发内核出错: ${err.message}`);
-    });
-}
+    webSocket.on('close', () => shell.kill());
+});
 
 
-startServer();
-setup();
+server.listen(PORT, '0.0.0.0', () => console.log('在' + PORT + '端口启动'));
